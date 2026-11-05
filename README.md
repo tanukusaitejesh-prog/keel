@@ -55,7 +55,7 @@ A worker claims a run (`FOR UPDATE SKIP LOCKED`, with a lease renewed by a heart
 | **Shared rate limits** | A token bucket per `provider:model` in Postgres, shared by all workers. If it is empty, the run is parked (`not_before`) rather than blocking a worker. A provider 429 drains the bucket and parks the run until `retry-after`. |
 | **Retries and budgets** | Deadlocks, dropped connections, provider 5xx, malformed tool calls and empty completions are retried with exponential backoff (max 5); everything else fails the run with the message. Per-run turn and token budgets. |
 | **Time travel** | `fork(run, atTurn, { model })` copies the log up to a model turn into a new run and continues from there, so you can replay a bad decision on another model or prompt without re-running earlier side effects. |
-| **Model-agnostic** | A provider-neutral message format with adapters for OpenAI-compatible APIs (Groq, OpenAI, vLLM...) and Claude. Claude's own content blocks are replayed unchanged. |
+| **Model-agnostic** | A provider-neutral message format with adapters for OpenAI-compatible APIs (Groq, OpenAI, vLLM...) and Claude, whose own content blocks are replayed unchanged. All evals ran on Groq; the Claude adapter is type-checked but has not yet been run against the live API. |
 
 ## Example agents
 
