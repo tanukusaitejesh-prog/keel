@@ -63,7 +63,47 @@ A worker claims a run (`FOR UPDATE SKIP LOCKED`, with a lease renewed by a heart
 
 **`researcher`: multi-agent Wikipedia research.** An orchestrator (gpt-oss-120b) splits a question into facts and delegates them to `wiki_researcher` sub-agents (gpt-oss-20b) that search and read Wikipedia and cite their sources; the orchestrator combines the findings and does the arithmetic.
 
-<!-- EVALS -->
+## Results
+
+All numbers come from `server/evals/results/*.json` and the scripts in this repo, run on Groq's free tier (8,000 tokens per minute per model).
+
+### Agents on real models
+
+Analyst answers are graded against **ground-truth SQL computed live from the same database**; argmax questions fail loudly if the ground truth has a tie. Reported across every valid run, not the best one:
+
+| Suite | Model | Correct | Avg tokens / question | Avg turns |
+|---|---|---|---|---|
+| Analyst, basic (15 questions × 2 runs) | gpt-oss-120b | **30 / 30** | ~1,900 | 3.0 |
+| Analyst, hard (8 questions × 2 runs): cohorts, window functions, percentiles, list-vs-charged price | gpt-oss-120b | **13 / 16** | ~2,100 | 3.0 |
+| Research, multi-agent (8 questions × 2 runs) | 120b orchestrator, 20b sub-agents | **16 / 16** | ~5,700 | 2.4 to 3.0 |
+
+The three hard-tier misses were genuine model errors, each checked by hand: a `LIMIT 1` inside a cohort CTE, a month-over-month calculation that filtered December out before applying `lag()`, and one empty completion (now resampled by the runtime; see below). The model fixed one failing SQL query from the database error message without help.
+
+### What the evals found in the runtime
+
+The evals were worth more for the bugs they surfaced than for the scores:
+
+- **A tool fed the model wrong data.** `run_sql` formatted dates through JavaScript `Date`, so on a machine in IST, `2025-01-01` was shown as `2024-12-31`. The model read quarter labels shifted by one and answered −4.6% instead of +10.2%. Dates are now passed through exactly as Postgres prints them. (That run, 14/15, is excluded from the table above.)
+- **Empty completions were accepted as answers.** The model occasionally returned no text and no tool calls; the runtime now treats that as transient and resamples.
+- **gpt-oss on Groq emits one tool call per turn**, even when asked for three, so the orchestrator delegated sequentially in all 16 delegations of the first research run. Delegation tools now take a list of `tasks` and the runtime fans them out as parallel child runs, so fan-out no longer depends on the model supporting parallel tool calls. In the second run every question fanned out (8 batch calls, 21 sub-agents) and the orchestrator needed 2.4 turns instead of 3.0. Wall time did not improve on the free tier (206 s vs 168 s on average with all 8 questions running at once), because the shared 8k tokens-per-minute budget, not latency, is the bottleneck there.
+
+### Durability
+
+- **Test suite (22 tests, Vitest, real Postgres):** single-agent and multi-agent flows, approvals, all four tool effects, budgets, rate limiting, 429 handling, retries, cancellation, forking, fencing. The **crash sweep** runs a multi-agent workflow once to count its fault points (over 40), then crashes the worker at each one in turn and requires the final runs, logs and side effects to be identical to the clean run every time.
+- **Chaos test with real processes** (`npm run chaos -w server`): worker processes are SIGKILLed every 500 ms while they run 100 top-level runs (half of them fanning out to 3 sub-agents). Two recorded runs:
+
+| | Run 1 | Run 2 (batch fan-out) |
+|---|---|---|
+| Agent runs (incl. sub-agents) | 250 | 250 |
+| Worker processes killed | 70 | 67 |
+| Runs recovered after their worker died | 86 | 80 |
+| Write-tool side effects (expected 300) | 300 | 300 |
+| External calls / deliveries (one retry, same idempotency key) | 50 / 51 | 50 / 51 |
+| Gaps in any step log | 0 | 0 |
+
+- **SQL sandbox:** 12 of 12 escape attempts blocked; CI fails if any succeeds. One escape (switching back to the superuser with `set_config('role', ...)`) worked against the first design, which used `SET ROLE` from a privileged session; the analyst now connects as its own unprivileged login role.
+
+Known limitation: the random-crash test uses a 150 ms lease, and once timed out (without any invariant failing) while the machine was also running an eval; it has passed on every run since.
 
 ## Running it
 
