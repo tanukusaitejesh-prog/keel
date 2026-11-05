@@ -80,7 +80,8 @@ export const policies: Record<string, Policy> = {
     return { text: `done: ${conv.toolResults(m).map((r) => (r.isError ? "E" : "ok")).join(",")}` };
   },
   boss: (m) => {
-    if (conv.turns(m) === 0) return { calls: ["a", "b", "c"].map((task) => ({ name: "delegate", args: { task } })) };
+    // One call fanning out two tasks, plus a second call: both delegation styles in one turn.
+    if (conv.turns(m) === 0) return { calls: [{ name: "delegate", args: { tasks: ["a", "b"] } }, { name: "delegate", args: { tasks: ["c"] } }] };
     return { text: `combined: ${conv.toolResults(m).map((r) => r.content).join(" + ")}` };
   },
   helper: (m) => {
@@ -90,7 +91,7 @@ export const policies: Record<string, Policy> = {
     if (task === "fail2") return { text: "" };
     return { text: `did ${task}` };
   },
-  recursive: (m) => (conv.turns(m) === 0 ? { calls: [{ name: "delegate", args: { task: "deeper" } }] } : { text: `depth result: ${conv.toolResults(m)[0]?.content}` }),
+  recursive: (m) => (conv.turns(m) === 0 ? { calls: [{ name: "delegate", args: { tasks: ["deeper"] } }] } : { text: `depth result: ${conv.toolResults(m)[0]?.content}` }),
 };
 
 export const agents = () =>

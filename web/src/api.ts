@@ -7,7 +7,7 @@ export interface RunSummary {
 export interface ToolCall { id: string; name: string; args: unknown }
 export interface Step { seq: number; kind: "model" | "tool"; call_id: string | null; name: string | null; latency_ms: number | null; created_at: string; payload: any }
 export interface Approval { run_id: string; call_id: string; tool_name: string; input: unknown; status: "pending" | "approved" | "rejected"; note: string | null }
-export interface Child { id: string; agent: string; input: string; status: Status; parent_call_id: string; input_tokens: number; output_tokens: number; result: string | null; error: string | null }
+export interface Child { id: string; agent: string; input: string; status: Status; parent_call_id: string; parent_task_index: number; input_tokens: number; output_tokens: number; result: string | null; error: string | null }
 export interface RunDetail {
   run: RunSummary & { result: string | null; error: string | null; parent_id: string | null; depth: number; forked_at_seq: number | null;
     max_turns: number; max_tokens: number; transient_errors: number; rate_limit_waits: number; lease_token: number; not_before: string };

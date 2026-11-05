@@ -159,7 +159,8 @@ function RunView({ d, open, onError }: { d: RunDetail; open: (id: string) => voi
   const { run, steps, approvals, children, external } = d;
   const turns = steps.filter((s) => s.kind === "model");
   const modelMs = turns.reduce((n, s) => n + (s.latency_ms ?? 0), 0);
-  const childByCall = new Map(children.map((c) => [c.parent_call_id, c]));
+  const childrenByCall = new Map<string, Child[]>();
+  for (const c of children) childrenByCall.set(c.parent_call_id, [...(childrenByCall.get(c.parent_call_id) ?? []), c]);
   const decided = new Map(approvals.map((a) => [a.call_id, a]));
   const attempts = new Map(external.map((e) => [e.idempotency_key.split(":").slice(1).join(":"), e.attempts]));
   const live = !["succeeded", "failed", "cancelled"].includes(run.status);
@@ -200,7 +201,7 @@ function RunView({ d, open, onError }: { d: RunDetail; open: (id: string) => voi
           s.kind === "model" ? (
             <ModelStep key={s.seq} s={s} run={d.run} onForked={open} onError={onError} />
           ) : (
-            <ToolStep key={s.seq} s={s} child={childByCall.get(s.call_id!)} approval={decided.get(s.call_id!)} attempts={attempts.get(s.call_id!)} open={open} />
+            <ToolStep key={s.seq} s={s} kids={childrenByCall.get(s.call_id!) ?? []} approval={decided.get(s.call_id!)} attempts={attempts.get(s.call_id!)} open={open} />
           ),
         )}
         {children.filter((c) => !steps.some((s) => s.call_id === c.parent_call_id)).map((c) => (
@@ -250,19 +251,19 @@ function ModelStep({ s, run, onForked, onError }: { s: Step; run: RunDetail["run
   );
 }
 
-function ToolStep({ s, child, approval, attempts, open }: { s: Step; child?: Child; approval?: Approval; attempts?: number; open: (id: string) => void }) {
+function ToolStep({ s, kids, approval, attempts, open }: { s: Step; kids: Child[]; approval?: Approval; attempts?: number; open: (id: string) => void }) {
   const { args, content, isError } = s.payload as { args: unknown; content: string; isError: boolean };
   return (
     <li className={`step tool${isError ? " err" : ""}`}>
       <div className="step-head">
         <code>{s.name}</code>
-        {child && <span className="tag">sub-agent</span>}
+        {kids.length > 0 && <span className="tag">{kids.length > 1 ? `${kids.length} sub-agents in parallel` : "sub-agent"}</span>}
         {approval && <span className={`tag ${approval.status}`}>{approval.status}</span>}
         {attempts && attempts > 1 && <span className="tag" title="External call retried after a crash with the same idempotency key">{attempts} attempts</span>}
         {isError && <span className="tag rejected">error</span>}
         {s.latency_ms != null && <span className="muted small">{s.latency_ms} ms</span>}
       </div>
-      {child && <ChildLink c={child} open={open} />}
+      {kids.map((c) => <ChildLink key={c.id} c={c} open={open} />)}
       <details>
         <summary>Arguments and result</summary>
         <pre>{JSON.stringify(args, null, 2)}</pre>

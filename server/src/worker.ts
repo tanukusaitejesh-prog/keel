@@ -1,3 +1,4 @@
+import "./env.js";
 import { pathToFileURL } from "node:url";
 import { createPool, migrate, type Db } from "./db.js";
 import { registry } from "./agents/index.js";

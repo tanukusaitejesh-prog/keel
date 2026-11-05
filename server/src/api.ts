@@ -1,3 +1,4 @@
+import "./env.js";
 import Fastify, { type FastifyInstance } from "fastify";
 import pg from "pg";
 import { pathToFileURL } from "node:url";
@@ -59,7 +60,7 @@ export async function buildApi(db: Db, agents: AgentRegistry, opts: { databaseUr
     const [steps, approvals, children, external, outbox] = await Promise.all([
       db.query(`SELECT seq, kind, call_id, name, payload, latency_ms, created_at FROM steps WHERE run_id = $1 ORDER BY seq`, [run.id]),
       db.query(`SELECT * FROM approvals WHERE run_id = $1 ORDER BY created_at`, [run.id]),
-      db.query(`SELECT id, agent, input, status, parent_call_id, input_tokens, output_tokens, result, error FROM runs WHERE parent_id = $1 ORDER BY created_at`, [run.id]),
+      db.query(`SELECT id, agent, input, status, parent_call_id, parent_task_index, input_tokens, output_tokens, result, error FROM runs WHERE parent_id = $1 ORDER BY created_at, parent_task_index`, [run.id]),
       db.query(`SELECT idempotency_key, tool_name, attempts FROM external_calls WHERE run_id = $1`, [run.id]),
       db.query(`SELECT call_id, channel, payload, sent_at FROM outbox WHERE run_id = $1`, [run.id]),
     ]);

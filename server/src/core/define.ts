@@ -11,15 +11,25 @@ export function defineTool<I>(def: ToolDef<I>): ToolDef<I> {
   return def;
 }
 
-/** Expose another agent as a tool. Calls fan out in parallel as durable child runs. */
-export function agentTool(opts: { name: string; description: string; agent: string }): ToolDef<{ task: string }> {
+/**
+ * Expose another agent as a tool. One call takes a list of tasks and fans them
+ * out as parallel, durable child runs, so fan-out does not depend on the model
+ * emitting several tool calls in one turn (many models, e.g. gpt-oss on Groq, emit one).
+ */
+export function agentTool(opts: { name: string; description: string; agent: string; maxTasks?: number }): ToolDef<{ tasks: string[] }> {
   return defineTool({
     name: opts.name,
     description: opts.description,
     effect: "agent",
     agent: opts.agent,
-    input: z.object({ task: z.string().min(1).max(2000).describe("A self-contained task for the sub-agent") }),
-    toTask: (i) => i.task,
+    input: z.object({
+      tasks: z
+        .array(z.string().min(1).max(2000))
+        .min(1)
+        .max(opts.maxTasks ?? 5)
+        .describe("Independent, self-contained tasks. Each runs as its own sub-agent, all in parallel."),
+    }),
+    toTasks: (i) => i.tasks,
   });
 }
 

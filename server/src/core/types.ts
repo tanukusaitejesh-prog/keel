@@ -96,9 +96,9 @@ export interface ToolDef<I = any> {
   /** Results longer than this are truncated before the model sees them (saves tokens). */
   maxOutputChars?: number;
   run?: (ctx: ToolContext, input: I) => Promise<unknown>;
-  /** For effect "agent": the agent to delegate to, and how to phrase its task. */
+  /** For effect "agent": the agent to delegate to, and the tasks (one child run each) for a call. */
   agent?: string;
-  toTask?: (input: I) => string;
+  toTasks?: (input: I) => string[];
 }
 
 /** A recoverable tool failure: the model sees the message and can try again. */

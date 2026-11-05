@@ -8,6 +8,7 @@
  * same database, so grading can never drift from the data. Results are saved
  * to evals/results/ as JSON.
  */
+import "../src/env.js";
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,11 +21,7 @@ import { startRun, TERMINAL } from "../src/core/runtime.js";
 import { startWorker } from "../src/core/worker.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
-try {
-  process.loadEnvFile(path.join(here, "..", "..", ".env"));
-} catch {
-  /* env may come from the shell */
-}
+
 
 type Expect = { kind: "number"; value: number; tol: number } | { kind: "text"; value: string };
 interface Case {

@@ -1,3 +1,4 @@
+import "./env.js";
 import { createPool, migrate } from "./db.js";
 import { seedShop } from "./agents/shop-data.js";
 

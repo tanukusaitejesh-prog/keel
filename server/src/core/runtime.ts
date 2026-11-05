@@ -443,22 +443,24 @@ async function handleAgentCall(
       const parsed = t.input.safeParse(c.args ?? {});
       if (!parsed.success) continue; // reported when this call comes up
       const child = opts.agents.get(t.agent!);
-      const task = t.toTask ? t.toTask(parsed.data) : JSON.stringify(parsed.data);
-      await tx.query(
-        `INSERT INTO runs (agent, input, model, parent_id, parent_call_id, depth, max_turns, max_tokens)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-         ON CONFLICT (parent_id, parent_call_id) WHERE parent_id IS NOT NULL DO NOTHING`,
-        [child.name, task, child.model, run.id, c.id, run.depth + 1, child.maxTurns ?? DEFAULTS.maxTurns, child.maxTokens ?? DEFAULTS.maxTokens],
-      );
+      const tasks = t.toTasks ? t.toTasks(parsed.data) : [JSON.stringify(parsed.data)];
+      for (const [i, task] of tasks.entries()) {
+        await tx.query(
+          `INSERT INTO runs (agent, input, model, parent_id, parent_call_id, parent_task_index, depth, max_turns, max_tokens)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (parent_id, parent_call_id, parent_task_index) WHERE parent_id IS NOT NULL DO NOTHING`,
+          [child.name, task, child.model, run.id, c.id, i, run.depth + 1, child.maxTurns ?? DEFAULTS.maxTurns, child.maxTokens ?? DEFAULTS.maxTokens],
+        );
+      }
     }
-    const { rows } = await tx.query<{ status: string; result: string | null; error: string | null; id: string }>(
-      `SELECT id, status, result, error FROM runs WHERE parent_id = $1 AND parent_call_id = $2`,
+    const { rows } = await tx.query<{ status: string; input: string; result: string | null; error: string | null }>(
+      `SELECT status, input, result, error FROM runs WHERE parent_id = $1 AND parent_call_id = $2 ORDER BY parent_task_index`,
       [run.id, call.id],
     );
-    const child = rows[0]!;
-    if ((TERMINAL as readonly string[]).includes(child.status)) {
-      const ok = child.status === "succeeded";
-      await record(tx, ok ? child.result ?? "" : `Sub-agent ${child.status}: ${child.error ?? "no details"}`, !ok);
+    if (rows.length && rows.every((r) => (TERMINAL as readonly string[]).includes(r.status))) {
+      const answer = (r: (typeof rows)[number]) => (r.status === "succeeded" ? r.result ?? "" : `Sub-agent ${r.status}: ${r.error ?? "no details"}`);
+      const content = rows.length === 1 ? answer(rows[0]!) : rows.map((r, i) => `[${i + 1}] ${r.input}\n${answer(r)}`).join("\n\n");
+      await record(tx, content, rows.every((r) => r.status !== "succeeded"));
       fault("tool:before-commit");
       return "done" as const;
     }

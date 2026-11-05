@@ -96,7 +96,14 @@ describe("multi-agent", () => {
     await settle(db, [id], { workers: 2, concurrency: 2 });
     const done = await runRow(db, id);
     expect(done.status).toBe("succeeded");
-    expect(done.result).toBe("combined: did a + did b + did c");
+    // The two-task call returns both results, labelled by task; the single-task call returns its result as is.
+    expect(done.result).toBe("combined: [1] a\ndid a\n\n[2] b\ndid b + did c");
+    const tasks = (await db.query(`SELECT parent_call_id, parent_task_index, input FROM runs WHERE parent_id = $1 ORDER BY 1, 2`, [id])).rows;
+    expect(tasks).toEqual([
+      { parent_call_id: "call_0_0", parent_task_index: 0, input: "a" },
+      { parent_call_id: "call_0_0", parent_task_index: 1, input: "b" },
+      { parent_call_id: "call_0_1", parent_task_index: 0, input: "c" },
+    ]);
     expect(await ledger()).toEqual([1, 1, 1]);
   });
 
@@ -104,7 +111,7 @@ describe("multi-agent", () => {
     const providers = envProviders({
       scripted: (model) =>
         new ScriptedProvider(model, (m) => {
-          if (model === "boss") return conv.turns(m) === 0 ? { calls: [{ name: "delegate", args: { task: "ok" } }, { name: "delegate", args: { task: "fail" } }] } : { text: conv.toolResults(m).map((r) => `${r.isError ? "ERR" : "OK"}`).join(",") };
+          if (model === "boss") return conv.turns(m) === 0 ? { calls: [{ name: "delegate", args: { tasks: ["ok"] } }, { name: "delegate", args: { tasks: ["fail"] } }] } : { text: conv.toolResults(m).map((r) => `${r.isError ? "ERR" : "OK"}`).join(",") };
           const task = (m[0] as { content: string }).content;
           return task === "fail" ? { calls: [{ name: "add_entry", args: { amount: 0.5 } }] } : conv.turns(m) === 0 ? { calls: [{ name: "add_entry", args: { amount: 1 } }] } : { text: "fine" };
         }),
@@ -114,6 +121,22 @@ describe("multi-agent", () => {
     expect((await runRow(db, id)).result).toBe("OK,ERR");
     const failed = (await db.query(`SELECT error FROM runs WHERE parent_id = $1 AND status = 'failed'`, [id])).rows;
     expect(failed[0].error).toContain("turn budget exhausted");
+  });
+
+  it("a batch with one failed task reports both outcomes and is not marked as an error", async () => {
+    const providers = envProviders({
+      scripted: (model) =>
+        new ScriptedProvider(model, (m) => {
+          if (model === "boss") return conv.turns(m) === 0 ? { calls: [{ name: "delegate", args: { tasks: ["ok", "fail"] } }] } : { text: JSON.stringify(conv.toolResults(m)[0]) };
+          const task = (m[0] as { content: string }).content;
+          return task === "fail" ? { calls: [{ name: "add_entry", args: { amount: 0.5 } }] } : conv.turns(m) === 0 ? { calls: [{ name: "add_entry", args: { amount: 1 } }] } : { text: "fine" };
+        }),
+    });
+    const id = await start("boss");
+    await settle(db, [id], { providers });
+    const result = JSON.parse((await runRow(db, id)).result);
+    expect(result.isError).toBe(false);
+    expect(result.content).toMatch(/^\[1\] ok\nfine\n\n\[2\] fail\nSub-agent failed: turn budget exhausted/);
   });
 
   it("stops runaway recursion at the depth limit", async () => {

@@ -80,8 +80,8 @@ export const researcher = defineAgent({
   maxTurns: 6,
   maxTokens: 40_000,
   maxOutputTokens: 1536,
-  system: `You coordinate research. Split the question into the independent facts you need, and call delegate_research once per fact, all in the same turn so they run in parallel.
-Each sub-agent only sees its own task, so make every task self-contained.
+  system: `You coordinate research. Split the question into the independent facts you need, then call delegate_research once with all of them in "tasks"; they run in parallel.
+Each sub-agent only sees its own task, so make every task self-contained. Delegate again only for facts that are still missing.
 Then combine the findings, doing any arithmetic yourself, and cite the source URLs. If findings conflict or are missing, say so.
 End with a final line in the form "Answer: <value>".`,
   tools: [agentTool({ name: "delegate_research", description: "Ask a research sub-agent to find one fact on Wikipedia.", agent: "wiki_researcher" })],

@@ -37,7 +37,10 @@ CREATE TABLE IF NOT EXISTS runs (
 -- Claims that took over a run whose previous worker died (lease expired).
 ALTER TABLE runs ADD COLUMN IF NOT EXISTS recoveries int NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS runs_claimable_idx ON runs (not_before) WHERE status IN ('queued', 'running');
-CREATE UNIQUE INDEX IF NOT EXISTS runs_one_child_per_call ON runs (parent_id, parent_call_id) WHERE parent_id IS NOT NULL;
+-- One delegation call can fan out several tasks: one child run per (call, task index).
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS parent_task_index int NOT NULL DEFAULT 0;
+DROP INDEX IF EXISTS runs_one_child_per_call;
+CREATE UNIQUE INDEX IF NOT EXISTS runs_one_child_per_task ON runs (parent_id, parent_call_id, parent_task_index) WHERE parent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS runs_parent_idx ON runs (parent_id);
 
 -- Append-only event log; the conversation is rebuilt from it on every resume.
