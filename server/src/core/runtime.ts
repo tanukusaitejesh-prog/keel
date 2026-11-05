@@ -27,7 +27,9 @@ export type FaultPoint =
   | "tool:before-commit"
   | "tool:after-commit"
   | "agent:before-commit"
-  | "approval:before-commit";
+  | "approval:before-commit"
+  | "finish:before-commit"
+  | "agent:after-spawn";
 
 /** Emulates process death in tests: the worker drops the run without releasing its lease. */
 export class SimulatedCrash extends Error {}
@@ -62,7 +64,7 @@ export interface RuntimeOptions {
   limits?: Limits;
   maxDepth?: number;
   /** Test hook: throw SimulatedCrash at a named point. */
-  fault?: (point: FaultPoint, lease: Lease) => void;
+  fault?: (point: FaultPoint, lease: Lease) => void | Promise<void>;
 }
 
 export type RunOutcome = "succeeded" | "failed" | "paused" | "waiting" | "deferred" | "abandoned";
@@ -161,7 +163,9 @@ function specsFor(agent: AgentDef): ToolSpec[] {
 
 export async function executeRun(run: RunRow, owner: string, opts: RuntimeOptions): Promise<RunOutcome> {
   const lease: Lease = { runId: run.id, owner, token: run.lease_token };
-  const fault = (p: FaultPoint) => opts.fault?.(p, lease);
+  const fault = async (p: FaultPoint) => {
+    await opts.fault?.(p, lease);
+  };
   const abort = new AbortController();
   let lost = false;
   const heartbeat = setInterval(async () => {
@@ -202,21 +206,21 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
       const last = st.last;
       if (last && last.stop !== "tool_calls") {
         if (last.stop === "end") {
-          await finish(opts.db, lease, run, "succeeded", { result: last.text.trim() || "(empty answer)" });
+          await finish(opts.db, lease, run, fault, "succeeded", { result: last.text.trim() || "(empty answer)" });
           return "succeeded";
         }
         const why = last.stop === "length" ? "model output was truncated (max output tokens)" : last.stop === "refusal" ? "model declined the request" : "model stopped unexpectedly";
-        await finish(opts.db, lease, run, "failed", { error: why });
+        await finish(opts.db, lease, run, fault, "failed", { error: why });
         return "failed";
       }
 
       // 3. Ask the model for the next turn, within budget and rate limits.
       if (st.turns >= run.max_turns) {
-        await finish(opts.db, lease, run, "failed", { error: `turn budget exhausted (${run.max_turns} model turns)` });
+        await finish(opts.db, lease, run, fault, "failed", { error: `turn budget exhausted (${run.max_turns} model turns)` });
         return "failed";
       }
       if (tokensUsed >= run.max_tokens) {
-        await finish(opts.db, lease, run, "failed", { error: `token budget exhausted (${tokensUsed} of ${run.max_tokens})` });
+        await finish(opts.db, lease, run, fault, "failed", { error: `token budget exhausted (${tokensUsed} of ${run.max_tokens})` });
         return "failed";
       }
       const provider = opts.providers(run.model);
@@ -239,7 +243,7 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
         }
         reserved = r.reserved;
       }
-      fault("model:before-call");
+      await fault("model:before-call");
       const t0 = performance.now();
       let turn: ModelTurn;
       try {
@@ -270,10 +274,10 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
           `UPDATE runs SET input_tokens = input_tokens + $2, output_tokens = output_tokens + $3, updated_at = now() WHERE id = $1`,
           [run.id, turn.usage.input, turn.usage.output],
         );
-        fault("model:before-commit");
+        await fault("model:before-commit");
       });
       tokensUsed += turn.usage.input + turn.usage.output;
-      fault("model:after-commit");
+      await fault("model:after-commit");
     }
   } catch (err) {
     if (err instanceof SimulatedCrash || err instanceof LeaseLost || lost) return "abandoned";
@@ -282,7 +286,7 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
       if (isTransientDbError(err) || err instanceof TransientModelError) {
         if (await requeue(opts.db, lease, message)) return "deferred";
       }
-      await finish(opts.db, lease, run, "failed", { error: message });
+      await finish(opts.db, lease, run, fault, "failed", { error: message });
       return "failed";
     } catch (inner) {
       if (inner instanceof LeaseLost || isTransientDbError(inner)) return "abandoned"; // lease expiry retries it
@@ -300,7 +304,7 @@ async function handleCall(
   agent: AgentDef,
   lease: Lease,
   opts: RuntimeOptions,
-  fault: (p: FaultPoint) => void,
+  fault: (p: FaultPoint) => Promise<void>,
   signal: AbortSignal,
 ): Promise<"done" | "paused" | "waiting"> {
   const db = opts.db;
@@ -315,9 +319,9 @@ async function handleCall(
     await withTx(db, async (tx) => {
       await fence(tx, lease);
       await record(tx, content, true);
-      fault("tool:before-commit");
+      await fault("tool:before-commit");
     });
-    fault("tool:after-commit");
+    await fault("tool:after-commit");
     return "done" as const;
   };
 
@@ -348,7 +352,7 @@ async function handleCall(
           JSON.stringify(input),
         ]);
         await tx.query(`UPDATE runs SET status = 'awaiting_approval', lease_owner = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1`, [run.id]);
-        fault("approval:before-commit");
+        await fault("approval:before-commit");
       });
       return "paused";
     }
@@ -367,7 +371,7 @@ async function handleCall(
       let content: string;
       let isError = false;
       try {
-        fault("tool:before-run");
+        await fault("tool:before-run");
         content = format(await tool.run!({ ...ctx, tx }, input), limit);
         await tx.query("RELEASE SAVEPOINT tool_call");
       } catch (err) {
@@ -377,9 +381,9 @@ async function handleCall(
         isError = true;
       }
       await record(tx, content, isError, Math.round(performance.now() - t0));
-      fault("tool:before-commit");
+      await fault("tool:before-commit");
     });
-    fault("tool:after-commit");
+    await fault("tool:after-commit");
     return "done";
   }
 
@@ -395,7 +399,7 @@ async function handleCall(
     });
   }
 
-  fault("tool:before-run");
+  await fault("tool:before-run");
   let content: string;
   let isError = false;
   try {
@@ -409,9 +413,9 @@ async function handleCall(
   await withTx(db, async (tx) => {
     await fence(tx, lease);
     await record(tx, content, isError, latency);
-    fault("tool:before-commit");
+    await fault("tool:before-commit");
   });
-  fault("tool:after-commit");
+  await fault("tool:after-commit");
   return "done";
 }
 
@@ -427,7 +431,7 @@ async function handleAgentCall(
   agent: AgentDef,
   lease: Lease,
   opts: RuntimeOptions,
-  fault: (p: FaultPoint) => void,
+  fault: (p: FaultPoint) => Promise<void>,
   record: (tx: Tx, content: string, isError: boolean, latency?: number) => Promise<void>,
 ): Promise<"done" | "waiting"> {
   const maxDepth = opts.maxDepth ?? DEFAULTS.maxDepth;
@@ -453,6 +457,7 @@ async function handleAgentCall(
         );
       }
     }
+    await fault("agent:after-spawn");
     const { rows } = await tx.query<{ status: string; input: string; result: string | null; error: string | null }>(
       `SELECT status, input, result, error FROM runs WHERE parent_id = $1 AND parent_call_id = $2 ORDER BY parent_task_index`,
       [run.id, call.id],
@@ -461,14 +466,14 @@ async function handleAgentCall(
       const answer = (r: (typeof rows)[number]) => (r.status === "succeeded" ? r.result ?? "" : `Sub-agent ${r.status}: ${r.error ?? "no details"}`);
       const content = rows.length === 1 ? answer(rows[0]!) : rows.map((r, i) => `[${i + 1}] ${r.input}\n${answer(r)}`).join("\n\n");
       await record(tx, content, rows.every((r) => r.status !== "succeeded"));
-      fault("tool:before-commit");
+      await fault("tool:before-commit");
       return "done" as const;
     }
     await tx.query(`UPDATE runs SET status = 'waiting', lease_owner = NULL, lease_expires_at = NULL, updated_at = now() WHERE id = $1`, [run.id]);
-    fault("agent:before-commit");
+    await fault("agent:before-commit");
     return "waiting" as const;
   });
-  if (outcome === "done") fault("tool:after-commit");
+  if (outcome === "done") await fault("tool:after-commit");
   return outcome;
 }
 
@@ -488,15 +493,29 @@ function format(out: unknown, limit: number): string {
   return s.length > limit ? `${s.slice(0, limit)}\n...[truncated ${s.length - limit} characters]` : s;
 }
 
-async function finish(db: Db, lease: Lease, run: RunRow, status: "succeeded" | "failed", out: { result?: string; error?: string }) {
+async function finish(
+  db: Db,
+  lease: Lease,
+  run: RunRow,
+  fault: (p: FaultPoint) => Promise<void>,
+  status: "succeeded" | "failed",
+  out: { result?: string; error?: string },
+) {
   await withTx(db, async (tx) => {
     await fence(tx, lease);
+    // Lock the parent row BEFORE changing our status. A parent deciding whether to sleep
+    // holds this same lock while it reads its children, so the two cannot interleave:
+    // either the parent sees us finished, or it is already 'waiting' when we wake it.
+    // Without this a wake-up could be lost (found by CI): we woke a parent that was still
+    // 'running' (no-op) while it read our not-yet-committed status and went to sleep forever.
+    if (run.parent_id) await tx.query(`SELECT 1 FROM runs WHERE id = $1 FOR UPDATE`, [run.parent_id]);
     await tx.query(
       `UPDATE runs SET status = $2, result = $3, error = $4, lease_owner = NULL, lease_expires_at = NULL,
               updated_at = now(), finished_at = now() WHERE id = $1`,
       [run.id, status, out.result ?? null, out.error ?? null],
     );
     if (run.parent_id) await wakeParent(tx, run.parent_id);
+    await fault("finish:before-commit");
   });
 }
 
@@ -561,6 +580,8 @@ export async function decide(db: Db, runId: string, callId: string, decision: "a
 /** Cancel a run and every descendant. Workers holding them lose the fence and stop. */
 export async function cancelRun(db: Db, runId: string): Promise<number> {
   return withTx(db, async (tx) => {
+    // Same lock order as finish(): parent row first (see the comment there).
+    await tx.query(`SELECT 1 FROM runs WHERE id = (SELECT parent_id FROM runs WHERE id = $1) FOR UPDATE`, [runId]);
     const { rows } = await tx.query<{ id: string; parent_id: string | null }>(
       `WITH RECURSIVE tree AS (
          SELECT id FROM runs WHERE id = $1

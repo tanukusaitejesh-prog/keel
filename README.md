@@ -89,7 +89,8 @@ The evals were worth more for the bugs they surfaced than for the scores:
 
 ### Durability
 
-- **Test suite (22 tests, Vitest, real Postgres):** single-agent and multi-agent flows, approvals, all four tool effects, budgets, rate limiting, 429 handling, retries, cancellation, forking, fencing. The **crash sweep** runs a multi-agent workflow once to count its fault points (over 40), then crashes the worker at each one in turn and requires the final runs, logs and side effects to be identical to the clean run every time.
+- **Test suite (24 tests, Vitest, real Postgres):** single-agent and multi-agent flows, approvals, all four tool effects, budgets, rate limiting, 429 handling, retries, cancellation, forking, fencing. The **crash sweep** runs a multi-agent workflow once to count its fault points (over 40), then crashes the worker at each one in turn and requires the final runs, logs and side effects to be identical to the clean run every time.
+- **A lost wake-up race, caught by CI.** The first GitHub Actions run failed: a parent agent slept forever although all its sub-agents had finished. A child's "finished" transaction had tried to wake the parent while the parent was still running (a no-op), and the parent, at the same moment, read the child's not-yet-committed status and went to sleep. It never reproduced on the development machine, so a deterministic test now freezes both transactions at exactly that point; it fails without the fix (the child locks the parent's row before changing its own status) and passes with it.
 - **Chaos test with real processes** (`npm run chaos -w server`): worker processes are SIGKILLed every 500 ms while they run 100 top-level runs (half of them fanning out to 3 sub-agents). Two recorded runs:
 
 | | Run 1 | Run 2 (batch fan-out) |

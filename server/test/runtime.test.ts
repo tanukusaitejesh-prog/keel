@@ -123,6 +123,78 @@ describe("multi-agent", () => {
     expect(failed[0].error).toContain("turn budget exhausted");
   });
 
+  it("never loses a wake-up: a child finishing while its parent is checking on it (deterministic)", async () => {
+    // Recreate the exact interleaving CI hit: child c's 'finished' transaction is frozen just
+    // before commit while the parent is awake and reads c's status.
+    const opts = { db, agents: reg, providers: scripted(), leaseMs: 5000 };
+    const id = await start("boss");
+    expect(await executeRun((await claimRun(db, "wp", 5000))!, "wp", opts)).toBe("waiting");
+    const kids = (await db.query(`SELECT id, input FROM runs WHERE parent_id = $1`, [id])).rows;
+    // Finish a and b normally; each one wakes the parent (status 'queued').
+    for (const k of kids.filter((k) => k.input !== "c")) {
+      await db.query(`UPDATE runs SET not_before = now() - interval '1 hour' WHERE id = $1`, [k.id]); // claim this one first
+      const r = (await claimRun(db, "wk", 5000))!;
+      expect(r.id).toBe(k.id);
+      expect(await executeRun(r, "wk", opts)).toBe("succeeded");
+    }
+    const c = kids.find((k) => k.input === "c")!;
+    const gate = () => {
+      let open!: () => void;
+      let hit!: () => void;
+      return { wait: new Promise<void>((r) => (open = r)), reached: new Promise<void>((r) => (hit = r)), open: () => open(), hit: () => hit() };
+    };
+    const parentGate = gate();
+    const childGate = gate();
+
+    // 1. The woken parent runs and is frozen right after spawning, before it reads c's status
+    //    (its second delegation call, the one that delegated "c").
+    await db.query(`UPDATE runs SET not_before = now() + interval '1 hour' WHERE id = $1`, [c.id]);
+    const parentRun = (await claimRun(db, "wp2", 5000))!;
+    expect(parentRun.id).toBe(id);
+    let spawns = 0;
+    const parentDone = executeRun(parentRun, "wp2", { ...opts, fault: async (p) => {
+      if (p === "agent:after-spawn" && ++spawns === 2) {
+        parentGate.hit();
+        await parentGate.wait;
+      }
+    } });
+    await parentGate.reached;
+
+    // 2. Child c finishes now and is frozen just before its commit. Without the fix it gets
+    //    here at once (its wake-up is a no-op: the parent is 'running'). With the fix it blocks
+    //    on the parent's row lock instead, so give it a moment rather than waiting forever.
+    await db.query(`UPDATE runs SET not_before = now() - interval '2 hours' WHERE id = $1`, [c.id]);
+    const cRun = (await claimRun(db, "wc", 5000))!;
+    expect(cRun.id).toBe(c.id);
+    const cDone = executeRun(cRun, "wc", { ...opts, fault: async (p) => {
+      if (p === "finish:before-commit") {
+        childGate.hit();
+        await childGate.wait;
+      }
+    } });
+    await Promise.race([childGate.reached, new Promise((r) => setTimeout(r, 1000))]);
+
+    // 3. The parent reads c's status and decides whether to sleep; then c commits.
+    parentGate.open();
+    await parentDone;
+    childGate.open();
+    await cDone;
+
+    // 4. The parent must have been woken: everything finishes.
+    await settle(db, [id], { timeoutMs: 5000 });
+    expect((await runRow(db, id)).status).toBe("succeeded");
+  });
+
+  it("never loses a wake-up when sub-agents finish while the parent is checking on them (stress)", async () => {
+    // Regression test for a lost wake-up first seen in CI: a child finished while its parent was
+    // running and reading the child's (not yet committed) status, so the parent slept forever.
+    const ids: string[] = [];
+    for (let i = 0; i < 40; i++) ids.push(await start("boss"));
+    await settle(db, ids, { workers: 6, concurrency: 4, timeoutMs: 60_000 });
+    const statuses = (await db.query(`SELECT status, count(*)::int AS n FROM runs GROUP BY 1`)).rows;
+    expect(statuses).toEqual([{ status: "succeeded", n: 40 * 4 }]);
+  });
+
   it("a batch with one failed task reports both outcomes and is not marked as an error", async () => {
     const providers = envProviders({
       scripted: (model) =>
@@ -290,8 +362,8 @@ describe("durability", () => {
       externalRetries += [...remote.calls.values()].filter((c) => c > 1).length;
     }
     expect([...kinds].sort()).toEqual([
-      "agent:before-commit", "approval:before-commit", "model:after-commit", "model:before-call", "model:before-commit",
-      "tool:after-commit", "tool:before-commit", "tool:before-run",
+      "agent:after-spawn", "agent:before-commit", "approval:before-commit", "finish:before-commit", "model:after-commit",
+      "model:before-call", "model:before-commit", "tool:after-commit", "tool:before-commit", "tool:before-run",
     ]);
     // External calls are at-least-once: some crashes forced a retry, always with the same key.
     expect(externalRetries).toBeGreaterThan(0);
