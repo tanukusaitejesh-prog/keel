@@ -127,7 +127,10 @@ export async function settle(
         [ids, TERMINAL],
       );
       if (open.rows[0].n === 0) return;
-      if (Date.now() > deadline) throw new Error(`timed out with ${open.rows[0].n} run(s) open`);
+      if (Date.now() > deadline) {
+        const stuck = await db.query(`SELECT agent, status, not_before > now() AS parked, lease_owner, lease_token, transient_errors, left(error, 200) AS error FROM runs WHERE status <> ALL($1)`, [TERMINAL]);
+        throw new Error(`timed out with ${open.rows[0].n} run(s) open: ${JSON.stringify(stuck.rows)}`);
+      }
       await new Promise((r) => setTimeout(r, 15));
     }
   } finally {

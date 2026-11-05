@@ -229,12 +229,14 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
       };
       const tpm = opts.limits?.tpm(run.model);
       const estimate = estimateTokens([req.system, req.messages, req.tools], req.maxOutputTokens);
+      let reserved = 0;
       if (tpm) {
-        const waitMs = await reserve(opts.db, run.model, tpm, estimate);
-        if (waitMs > 0) {
-          await park(opts.db, lease, waitMs);
+        const r = await reserve(opts.db, run.model, tpm, estimate);
+        if (r.waitMs > 0) {
+          await park(opts.db, lease, r.waitMs);
           return "deferred";
         }
+        reserved = r.reserved;
       }
       fault("model:before-call");
       const t0 = performance.now();
@@ -250,7 +252,7 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
         throw err;
       }
       const latency = Math.round(performance.now() - t0);
-      if (tpm) await reconcile(opts.db, run.model, turn.usage.input + turn.usage.output - estimate);
+      if (tpm) await reconcile(opts.db, run.model, turn.usage.input + turn.usage.output - reserved);
       await withTx(opts.db, async (tx) => {
         await fence(tx, lease);
         await tx.query(`INSERT INTO steps (run_id, seq, kind, payload, latency_ms) VALUES ($1, $2, 'model', $3, $4)`, [

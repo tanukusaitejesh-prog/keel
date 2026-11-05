@@ -67,7 +67,7 @@ describe("single agent", () => {
     await settle(db, [id], { providers });
     const r = await runRow(db, id);
     expect(r.status).toBe("succeeded");
-    expect(r.result).toBe("Unknown tool \"nope\". | Your arguments were | Invalid arguments: a | amount must be posit");
+    expect(r.result).toBe("Unknown tool \"nope\". | Your arguments were  | Invalid arguments: a | amount must be posit");
     expect(await ledger()).toEqual([]);
   });
 
@@ -221,8 +221,8 @@ describe("durability", () => {
 
   it("crashing at every fault point of a multi-agent workflow always ends in the clean-run state", async () => {
     const snapshot = async () => ({
-      runs: (await db.query(`SELECT agent, input, depth, status, result FROM runs ORDER BY depth, input`)).rows,
-      steps: (await db.query(`SELECT r.agent, r.input, s.seq, s.kind, s.name, s.payload->'content' AS content, s.payload->'turn'->'toolCalls' AS calls FROM steps s JOIN runs r ON r.id = s.run_id ORDER BY r.depth, r.input, s.seq`)).rows,
+      runs: (await db.query(`SELECT agent, input, depth, status, result FROM runs ORDER BY depth, agent, input`)).rows,
+      steps: (await db.query(`SELECT r.agent, r.input, s.seq, s.kind, s.name, s.payload->'content' AS content, s.payload->'turn'->'toolCalls' AS calls FROM steps s JOIN runs r ON r.id = s.run_id ORDER BY r.depth, r.agent, r.input, s.seq`)).rows,
       ledger: await ledger(),
       remoteKeys: remote.calls.size,
     });

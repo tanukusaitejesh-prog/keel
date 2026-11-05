@@ -23,8 +23,11 @@ export function envLimits(): Limits {
   };
 }
 
-/** Returns 0 if the tokens were reserved, otherwise how many ms to wait before trying again. */
-export async function reserve(db: Db, key: string, tpm: number, tokens: number): Promise<number> {
+/**
+ * Try to take `tokens` from the bucket. Returns how many tokens were reserved
+ * (to reconcile later) and, if none could be, how long to wait.
+ */
+export async function reserve(db: Db, key: string, tpm: number, tokens: number): Promise<{ reserved: number; waitMs: number }> {
   // A request larger than the whole bucket could never run; let it through when the bucket is full.
   const want = Math.min(tokens, tpm);
   const refill = tpm / 60;
@@ -44,14 +47,17 @@ export async function reserve(db: Db, key: string, tpm: number, tokens: number):
       `UPDATE rate_buckets SET tokens = $2, capacity = $3, refill_per_sec = $4, updated_at = clock_timestamp() WHERE key = $1`,
       [key, ok ? available - want : available, tpm, refill],
     );
-    return ok ? 0 : Math.ceil(((want - available) / refill) * 1000);
+    return ok ? { reserved: want, waitMs: 0 } : { reserved: 0, waitMs: Math.ceil(((want - available) / refill) * 1000) };
   });
 }
 
-/** Correct the bucket once the real token count is known (may go negative: the debt is paid by waiting). */
+/**
+ * Correct the bucket once the real usage is known: delta = actual - reserved.
+ * It may go negative (the debt is paid by waiting) but never above capacity.
+ */
 export async function reconcile(db: Db, key: string, delta: number): Promise<void> {
   if (!delta) return;
-  await db.query(`UPDATE rate_buckets SET tokens = tokens - $2 WHERE key = $1`, [key, delta]);
+  await db.query(`UPDATE rate_buckets SET tokens = least(capacity, tokens - $2) WHERE key = $1`, [key, delta]);
 }
 
 /** Drain the bucket after the provider itself said 429, so other workers back off too. */

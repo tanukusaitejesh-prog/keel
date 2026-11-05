@@ -26,7 +26,10 @@ export function startWorker(
         continue;
       }
       try {
-        opts.onOutcome?.(run.id, await executeRun(run, slot, opts));
+        // Not `onOutcome?.(id, await executeRun(...))`: optional chaining would skip
+        // evaluating the arguments, so the run would never execute without a callback.
+        const outcome = await executeRun(run, slot, opts);
+        opts.onOutcome?.(run.id, outcome);
       } catch (err) {
         console.error(`[worker] run ${run.id} crashed the loop:`, err);
       }
