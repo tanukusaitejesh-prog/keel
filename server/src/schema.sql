@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS runs (
   finished_at       timestamptz,
   CHECK ((parent_id IS NULL) = (parent_call_id IS NULL))
 );
+-- Claims that took over a run whose previous worker died (lease expired).
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS recoveries int NOT NULL DEFAULT 0;
 CREATE INDEX IF NOT EXISTS runs_claimable_idx ON runs (not_before) WHERE status IN ('queued', 'running');
 CREATE UNIQUE INDEX IF NOT EXISTS runs_one_child_per_call ON runs (parent_id, parent_call_id) WHERE parent_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS runs_parent_idx ON runs (parent_id);

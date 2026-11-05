@@ -23,7 +23,8 @@ export async function reset(db: Db) {
 /** A fake remote service that deduplicates by idempotency key, like Stripe or SES would. */
 export const remote = {
   calls: new Map<string, number>(),
-  record(key: string) {
+  /** Replaceable: the chaos script records deliveries in Postgres so all processes share them. */
+  async record(key: string): Promise<void> {
     this.calls.set(key, (this.calls.get(key) ?? 0) + 1);
   },
 };
@@ -58,7 +59,7 @@ const notify = defineTool({
   effect: "external",
   input: z.object({ message: z.string() }),
   async run({ idempotencyKey }, { message }) {
-    remote.record(idempotencyKey);
+    await remote.record(idempotencyKey);
     return { delivered: message };
   },
 });

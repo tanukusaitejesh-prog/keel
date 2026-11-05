@@ -1,0 +1,38 @@
+{
+  "summary": {
+    "agent": "analyst",
+    "model": "groq:openai/gpt-oss-120b",
+    "cases": 1,
+    "passed": 1,
+    "passRate": 1,
+    "totalTokens": 1661,
+    "avgTokens": 1661,
+    "avgTurns": 3,
+    "toolCalls": 2,
+    "toolErrors": 0,
+    "selfCorrections": 0,
+    "rateLimitWaits": 0,
+    "wallSeconds": 2,
+    "at": "2026-11-05T06:47:08.595Z"
+  },
+  "results": [
+    {
+      "id": "customers",
+      "question": "How many customers do we have?",
+      "expected": 400,
+      "answer": "400",
+      "pass": true,
+      "status": "succeeded",
+      "error": null,
+      "turns": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "selfCorrections": 0,
+      "subAgents": 0,
+      "tokens": 1661,
+      "seconds": 1.29,
+      "rateLimitWaits": 0,
+      "runId": "a0a9929d-1f7e-4e73-a307-7cbf6ff33524"
+    }
+  ]
+}

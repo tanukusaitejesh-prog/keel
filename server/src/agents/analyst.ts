@@ -5,6 +5,7 @@ import { defineAgent, defineTool } from "../core/define.js";
 import { ToolError } from "../core/types.js";
 
 const MAX_ROWS = 50;
+const TEXT_TIME_OIDS = new Set([1082, 1083, 1114, 1184, 1266]); // date, time, timestamp, timestamptz, timetz
 
 /** Connections as the unprivileged keel_analyst login role (created by seedShop). */
 let pool: pg.Pool | null = null;
@@ -15,7 +16,13 @@ export function analystPool(): pg.Pool {
       url.username = "keel_analyst";
       url.password = analystPassword();
     }
-    pool = new pg.Pool({ connectionString: url.toString(), max: 5 });
+    pool = new pg.Pool({
+      connectionString: url.toString(),
+      max: 5,
+      // Show dates and timestamps exactly as Postgres prints them. Converting to JS
+      // Dates and back shifts them across time zones (2025-01-01 became 2024-12-31 in IST).
+      types: { getTypeParser: ((oid: number, format?: "text" | "binary") => (TEXT_TIME_OIDS.has(oid) ? (v: string) => v : pg.types.getTypeParser(oid, format))) as typeof pg.types.getTypeParser },
+    });
   }
   return pool;
 }
@@ -80,9 +87,7 @@ const runSql = defineTool({
 });
 
 function cell(v: unknown): string {
-  if (v === null) return "NULL";
-  if (v instanceof Date) return v.toISOString().slice(0, 10);
-  return String(v);
+  return v === null ? "NULL" : String(v);
 }
 
 const shareReport = defineTool({

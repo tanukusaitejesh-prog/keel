@@ -82,6 +82,7 @@ export async function claimRun(db: Db, owner: string, leaseMs: number): Promise<
   const { rows } = await db.query<RunRow>(
     `UPDATE runs
         SET status = 'running', lease_owner = $1, lease_token = lease_token + 1,
+            recoveries = recoveries + (status = 'running')::int,
             lease_expires_at = now() + make_interval(secs => $2::float / 1000), updated_at = now()
       WHERE id = (
               SELECT id FROM runs

@@ -116,6 +116,7 @@ export async function seedShop(db: Db): Promise<void> {
       GRANT SELECT ON ALL TABLES IN SCHEMA shop TO keel_analyst;
       ALTER ROLE keel_analyst SET search_path = shop;
       ALTER ROLE keel_analyst SET statement_timeout = '5s';
+      ALTER ROLE keel_analyst SET timezone = 'UTC';
       ALTER ROLE keel_analyst SET default_transaction_read_only = on;
     `);
     await client.query("COMMIT");
