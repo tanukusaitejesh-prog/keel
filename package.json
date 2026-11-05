@@ -1,0 +1,17 @@
+{
+  "name": "keel",
+  "private": true,
+  "workspaces": [
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "seed": "npm run seed -w server",
+    "api": "npm run api -w server",
+    "worker": "npm run worker -w server",
+    "web": "npm run dev -w web",
+    "test": "npm test -w server",
+    "typecheck": "npm run typecheck -w server && npm run typecheck -w web",
+    "build": "npm run build -w web"
+  }
+}
