@@ -208,6 +208,21 @@ describe("rate limits and transient failures", () => {
   });
 });
 
+describe("degenerate model output", () => {
+  it("resamples an empty completion instead of accepting it as the answer", async () => {
+    let n = 0;
+    const inner = new ScriptedProvider("ledger", () => ({ text: "Answer: 42" }));
+    const p: ModelProvider = { provider: "scripted", model: "ledger", complete: async (req) => (n++ === 0 ? { ...(await inner.complete(req)), text: "" } : inner.complete(req)) };
+    const id = await start("ledger");
+    await settle(db, [id], { providers: () => p });
+    const r = await runRow(db, id);
+    expect(r.status).toBe("succeeded");
+    expect(r.result).toBe("Answer: 42");
+    expect(r.transient_errors).toBe(1);
+    expect((await stepsOf(db, id)).length).toBe(1); // the empty turn was never recorded
+  });
+});
+
 describe("durability", () => {
   it("a worker that lost its lease cannot write anything", async () => {
     const id = await start("ledger");

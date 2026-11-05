@@ -253,6 +253,10 @@ export async function executeRun(run: RunRow, owner: string, opts: RuntimeOption
         throw err;
       }
       const latency = Math.round(performance.now() - t0);
+      // A turn with no text and no tool calls is a provider glitch, not an answer: resample it.
+      if (turn.stop === "end" && !turn.text.trim() && turn.toolCalls.length === 0) {
+        throw new TransientModelError("model returned an empty response");
+      }
       if (tpm) await reconcile(opts.db, run.model, turn.usage.input + turn.usage.output - reserved);
       await withTx(opts.db, async (tx) => {
         await fence(tx, lease);

@@ -29,6 +29,7 @@ try {
 type Expect = { kind: "number"; value: number; tol: number } | { kind: "text"; value: string };
 interface Case {
   id: string;
+  tier?: "basic" | "hard";
   question: string;
   expect: Expect | ((db: Db) => Promise<Expect>);
 }
@@ -61,6 +62,35 @@ const ANALYST: Case[] = [
   { id: "signup-no-order", question: "How many customers who signed up in 2025 have never placed an order?", expect: num(`SELECT count(*) v FROM shop.customers c WHERE c.signup_date >= '2025-01-01' AND c.signup_date < '2026-01-01' AND NOT EXISTS (SELECT 1 FROM shop.orders o WHERE o.customer_id = c.id)`) },
 ];
 
+const C25 = `o.status = 'completed' AND o.order_date >= '2025-01-01' AND o.order_date < '2026-01-01'`;
+const HARD: Case[] = [
+  { id: "top10-share", tier: "hard", question: "What share of 2025 revenue came from the top 10% of customers by their 2025 revenue (round the number of customers up to a whole number)? Give a percentage with one decimal place.",
+    expect: num(`WITH c AS (SELECT o.customer_id, sum(i.quantity * i.unit_price) rev FROM shop.orders o JOIN shop.order_items i ON i.order_id = o.id WHERE ${C25} GROUP BY 1),
+                 r AS (SELECT rev, row_number() OVER (ORDER BY rev DESC) rn, count(*) OVER () n FROM c)
+            SELECT round(100 * sum(rev) FILTER (WHERE rn <= ceil(n * 0.1)) / sum(rev), 1) v FROM r`, 0.051) },
+  { id: "q1-cohort-90d", tier: "hard", question: "Consider customers whose first order (any status) was placed in Q1 2025. What percentage of them placed another order (any status) on a later date at most 90 days after their first order? One decimal place.",
+    expect: num(`WITH f AS (SELECT customer_id, min(order_date) AS first FROM shop.orders GROUP BY 1),
+                 q AS (SELECT * FROM f WHERE first >= '2025-01-01' AND first < '2025-04-01')
+            SELECT round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM shop.orders o WHERE o.customer_id = q.customer_id AND o.order_date > q.first AND o.order_date <= q.first + 90)) / count(*), 1) v FROM q`, 0.051) },
+  { id: "best-mom-2026", tier: "hard", question: "Between January and June 2026, which month had the largest percentage increase in revenue compared with the month before it? (January is compared with December 2025.) Answer as YYYY-MM.",
+    expect: top(`WITH m AS (SELECT date_trunc('month', o.order_date) m, sum(i.quantity * i.unit_price) rev FROM shop.orders o JOIN shop.order_items i ON i.order_id = o.id
+                           WHERE o.status = 'completed' AND o.order_date >= '2025-12-01' AND o.order_date < '2026-07-01' GROUP BY 1),
+                 g AS (SELECT to_char(m, 'YYYY-MM') v, rev / lag(rev) OVER (ORDER BY m) - 1 score FROM m)
+            SELECT v, score FROM g WHERE score IS NOT NULL ORDER BY score DESC LIMIT 2`) },
+  { id: "median-order-2025", tier: "hard", question: "What was the median order value of completed orders placed in 2025? Round to 2 decimals.",
+    expect: num(`SELECT round(percentile_cont(0.5) WITHIN GROUP (ORDER BY v)::numeric, 2) v FROM (SELECT sum(i.quantity * i.unit_price) v FROM shop.orders o JOIN shop.order_items i ON i.order_id = o.id WHERE ${C25} GROUP BY o.id) t`, 0.011) },
+  { id: "discount-cost-2025", tier: "hard", question: "How much did discounts cost us in 2025? That is the total of (product list price minus the price actually charged) times quantity, over completed orders. Round to 2 decimals.",
+    expect: num(`SELECT round(sum((p.price - i.unit_price) * i.quantity), 2) v FROM shop.orders o JOIN shop.order_items i ON i.order_id = o.id JOIN shop.products p ON p.id = i.product_id WHERE ${C25}`, 0.011) },
+  { id: "country-rev-per-customer", tier: "hard", question: "Which country had the highest 2025 revenue per customer, counting only customers who placed at least one completed order in 2025?",
+    expect: top(`SELECT c.country v, sum(i.quantity * i.unit_price) / count(DISTINCT c.id) score FROM shop.orders o JOIN shop.order_items i ON i.order_id = o.id JOIN shop.customers c ON c.id = o.customer_id WHERE ${C25} GROUP BY 1 ORDER BY 2 DESC LIMIT 2`) },
+  { id: "longest-gap", tier: "hard", question: "Which customer had the longest gap in days between two consecutive orders of theirs (any status)? Give the customer's name.",
+    expect: top(`WITH g AS (SELECT customer_id, order_date - lag(order_date) OVER (PARTITION BY customer_id ORDER BY order_date, id) gap FROM shop.orders)
+            SELECT c.name v, max(g.gap) score FROM g JOIN shop.customers c ON c.id = g.customer_id WHERE g.gap IS NOT NULL GROUP BY c.id, c.name ORDER BY 2 DESC LIMIT 2`) },
+  { id: "returned-electronics", tier: "hard", question: "What percentage of the orders returned in 2025 contained at least one Electronics item? One decimal place.",
+    expect: num(`SELECT round(100.0 * count(*) FILTER (WHERE EXISTS (SELECT 1 FROM shop.order_items i JOIN shop.products p ON p.id = i.product_id WHERE i.order_id = o.id AND p.category = 'Electronics')) / count(*), 1) v
+            FROM shop.orders o WHERE o.status = 'returned' AND o.order_date >= '2025-01-01' AND o.order_date < '2026-01-01'`, 0.051) },
+];
+
 const RESEARCH: Case[] = [
   { id: "lovelace-turing", question: "How many years apart were Ada Lovelace and Alan Turing born?", expect: { kind: "number", value: 97, tol: 0 } },
   { id: "kilimanjaro-montblanc", question: "Which is taller, Mount Kilimanjaro or Mont Blanc?", expect: { kind: "text", value: "Kilimanjaro" } },
@@ -90,8 +120,11 @@ async function main() {
   const modelArg = process.argv.indexOf("--model");
   const limit = limitArg > 0 ? Number(process.argv[limitArg + 1]) : Infinity;
   const model = modelArg > 0 ? process.argv[modelArg + 1] : undefined;
-  const cases = (which === "research" ? RESEARCH : ANALYST).slice(0, limit);
+  const suites: Record<string, Case[]> = { analyst: [...ANALYST, ...HARD], "analyst-basic": ANALYST, "analyst-hard": HARD, research: RESEARCH };
+  if (!suites[which]) throw new Error(`unknown suite ${which}; one of ${Object.keys(suites).join(", ")}`);
+  const cases = suites[which]!.slice(0, limit);
   const agent = which === "research" ? "researcher" : "analyst";
+  const tierOf = new Map(cases.map((c) => [c.id, c.tier ?? "basic"]));
 
   const db = createPool();
   await migrate(db);
@@ -170,6 +203,12 @@ async function main() {
     toolErrors: sum("toolErrors"),
     selfCorrections: sum("selfCorrections"),
     rateLimitWaits: sum("rateLimitWaits"),
+    byTier: Object.fromEntries(
+      [...new Set(results.map((r) => tierOf.get(r.id)!))].map((t) => {
+        const rs = results.filter((r) => tierOf.get(r.id) === t);
+        return [t, { passed: rs.filter((r) => r.pass).length, cases: rs.length }];
+      }),
+    ),
     wallSeconds: Math.round((Date.now() - started) / 1000),
     at: new Date().toISOString(),
   };
