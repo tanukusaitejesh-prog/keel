@@ -1,0 +1,44 @@
+{
+  "summary": {
+    "agent": "researcher",
+    "model": "groq:openai/gpt-oss-120b",
+    "cases": 1,
+    "passed": 1,
+    "passRate": 1,
+    "totalTokens": 5296,
+    "avgTokens": 5296,
+    "avgTurns": 3,
+    "toolCalls": 2,
+    "toolErrors": 0,
+    "selfCorrections": 0,
+    "rateLimitWaits": 0,
+    "byTier": {
+      "basic": {
+        "passed": 1,
+        "cases": 1
+      }
+    },
+    "wallSeconds": 8,
+    "at": "2026-11-05T07:07:02.105Z"
+  },
+  "results": [
+    {
+      "id": "lovelace-turing",
+      "question": "How many years apart were Ada Lovelace and Alan Turing born?",
+      "expected": 97,
+      "answer": "97 years.",
+      "pass": true,
+      "status": "succeeded",
+      "error": null,
+      "turns": 3,
+      "toolCalls": 2,
+      "toolErrors": 0,
+      "selfCorrections": 0,
+      "subAgents": 2,
+      "tokens": 5296,
+      "seconds": 6.742,
+      "rateLimitWaits": 0,
+      "runId": "5b6e07de-0258-469a-9d34-e82494e6e7b5"
+    }
+  ]
+}
