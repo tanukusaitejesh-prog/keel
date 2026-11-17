@@ -44,6 +44,7 @@ export function defineAgent(def: AgentDef): AgentDef {
 }
 
 export function toolSpec(t: ToolDef): ToolSpec {
+  if (t.parameters) return { name: t.name, description: t.description, parameters: t.parameters };
   const schema = z.toJSONSchema(t.input, { target: "draft-7", io: "input" }) as Record<string, unknown>;
   delete schema.$schema;
   return { name: t.name, description: t.description, parameters: schema };

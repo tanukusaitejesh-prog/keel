@@ -2,7 +2,9 @@
 
 **A durable runtime for AI agents.** Define tools and agents in TypeScript; Keel runs them on PostgreSQL so that a worker can be killed at any moment and another one picks the run up without repeating a model call or a side effect. Agents can delegate to sub-agents in parallel, pause for human approval, share a rate limit across every worker, and be forked at any turn to replay them on a different model.
 
-**Stack:** TypeScript, Node.js, PostgreSQL, Fastify, React, Vite, Zod, OpenAI-compatible APIs (Groq) and the Claude API, Vitest, GitHub Actions.
+It also runs the LangChain ecosystem durably: **LangChain tools and chat models plug straight into Keel agents, LangGraph graphs run as crash-safe steps** checkpointed in the same Postgres, and a **RAG agent searches a pgvector knowledge base** through a LangGraph corrective-retrieval pipeline.
+
+**Stack:** TypeScript, Node.js, PostgreSQL + pgvector, LangChain, LangGraph, Fastify, React, Vite, Zod, OpenAI-compatible APIs (Groq) and the Claude API, Vitest, GitHub Actions.
 
 ```ts
 const runSql = defineTool({
@@ -63,6 +65,40 @@ A worker claims a run (`FOR UPDATE SKIP LOCKED`, with a lease renewed by a heart
 
 **`researcher`: multi-agent Wikipedia research.** An orchestrator (gpt-oss-120b) splits a question into facts and delegates them to `wiki_researcher` sub-agents (gpt-oss-20b) that search and read Wikipedia and cite their sources; the orchestrator combines the findings and does the arithmetic.
 
+**`docs`: RAG over a pgvector knowledge base.** Answers questions about the documents it has ingested (this README by default, `npm run seed`) and cites every claim as `[source#chunk]`. It is built from the LangChain pieces below: it runs on a LangChain chat model, searches with a LangChain tool, falls back to a LangGraph retrieval pipeline, and can save a note to the knowledge base, which needs human approval and commits exactly once with its step. Told to say "the docs do not cover it" rather than guess.
+
+## LangChain, LangGraph and RAG
+
+Keel owns the loop, the log and the guarantees; LangChain and LangGraph supply models, tools and graphs. Nothing in the core runtime changed except one optional field.
+
+```ts
+// Any LangChain tool becomes a durable Keel tool (its result is logged once, approvals and forking just work).
+// It can reach the run through config.configurable.keel (run id, idempotency key, pool).
+const search = fromLangChainTool(tool(async ({ query }, config) => docsStore(keelContext(config).db).similaritySearch(query, 5),
+  { name: "search_docs", description: "...", schema: z.object({ query: z.string() }) }));
+
+// Any LangChain chat model runs a Keel agent: model: "langchain:groq/openai/gpt-oss-120b",
+// or register your own: envProviders({ langchain: langChainResolver({ ollama: (m) => new ChatOllama({ model: m }) }) })
+
+// A LangGraph StateGraph runs as ONE durable tool call.
+const deepSearch = graphTool({ name: "deep_search_docs", input: z.object({ question: z.string() }),
+  graph: retrievalGraph({ store }), output: formatPassages });
+```
+
+| Piece | What Keel guarantees |
+|---|---|
+| **`fromLangChainTool`** (`src/langchain/tools.ts`) | The tool's own schema is shown to the model and its own validation errors go back to the model. Effect `read` or `external` (LangChain tools cannot join Keel's transaction, so `write` stays native). |
+| **`LangChainProvider`** (`src/langchain/model.ts`) | Converts Keel's log to LangChain messages and back (tool calls, invalid tool calls, usage, stop reasons). Model turns are still recorded once and replayed after a crash, never re-requested; a 429 parks the run in Postgres instead of blocking a worker. |
+| **`graphTool`** (`src/langchain/graph.ts`) | The graph's thread id is the call's idempotency key and LangGraph's `PostgresSaver` checkpoints after every node (`durability: "sync"`) in its own schema. If a worker dies mid-graph, the next worker **resumes after the last finished node**; if it dies after the graph finished but before the step was recorded, the saved final state is returned **without running anything**. |
+| **`PgVectorStore`** (`src/rag/store.ts`) | A LangChain `VectorStore` on the same database: pgvector cosine search with an HNSW index, or, on a Postgres without the extension, a `float4[]` column with an exact cosine scan in SQL. Chunks upsert by `(collection, source, chunk)`, so re-ingesting is idempotent, and writes can go through a Keel step's transaction. |
+| **`retrievalGraph`** (`src/rag/graph.ts`) | Corrective retrieval: `retrieve -> grade -> (rewrite -> retrieve)*`. `grade` keeps passages that clear a score threshold and share a content word with the question; too few, and `rewrite` reformulates the query and searches again, up to 3 times, then reports that the docs do not cover it. |
+
+Embeddings default to an offline hashing model (hashed unigrams and bigrams), so everything runs with no API key and retrieval tests are exact. It is a lexical baseline, not a semantic model: set `EMBEDDINGS_MODEL=openai:text-embedding-3-small` (any OpenAI-compatible server via `OPENAI_BASE_URL`) for real embeddings; vectors from different models are never compared.
+
+**What building it found.** The first retrieval test failed for two real reasons, not test noise: the suffix stripper turned "chaos" into "chao", and the markdown splitter cut the chaos-test table in two, leaving its rows with no words saying what they measured. Chunks that start inside a table now carry the sentence that introduces it, and the right chunk went from 6th to 1st.
+
+**Live check** (`npm run ask -w server -- docs "..."`, gpt-oss-120b on Groq through LangChain's `ChatOpenAI`): asked what happens when a worker is killed and how write tools avoid running twice, the agent called `search_docs`, then `deep_search_docs`, and answered correctly with citations to the README's durability table and guarantees in 3.7 s and ~7,300 tokens. One question, not an eval.
+
 ## Results
 
 All numbers come from `server/evals/results/*.json` and the scripts in this repo, run on Groq's free tier (8,000 tokens per minute per model).
@@ -89,7 +125,7 @@ The evals were worth more for the bugs they surfaced than for the scores:
 
 ### Durability
 
-- **Test suite (24 tests, Vitest, real Postgres):** single-agent and multi-agent flows, approvals, all four tool effects, budgets, rate limiting, 429 handling, retries, cancellation, forking, fencing. The **crash sweep** runs a multi-agent workflow once to count its fault points (over 40), then crashes the worker at each one in turn and requires the final runs, logs and side effects to be identical to the clean run every time.
+- **Test suite (39 tests, Vitest, real Postgres):** single-agent and multi-agent flows, approvals, all four tool effects, budgets, rate limiting, 429 handling, retries, cancellation, forking, fencing; plus LangChain tools and models, LangGraph crash-resume (a worker killed inside a graph node, and after the graph but before the commit), the vector store and the docs agent. CI runs on `pgvector/pgvector:pg17` and fails if the store falls back to the array backend. The **crash sweep** runs a multi-agent workflow once to count its fault points (over 40), then crashes the worker at each one in turn and requires the final runs, logs and side effects to be identical to the clean run every time.
 - **A lost wake-up race, caught by CI.** The first GitHub Actions run failed: a parent agent slept forever although all its sub-agents had finished. A child's "finished" transaction had tried to wake the parent while the parent was still running (a no-op), and the parent, at the same moment, read the child's not-yet-committed status and went to sleep. It never reproduced on the development machine, so a deterministic test now freezes both transactions at exactly that point; it fails without the fix (the child locks the parent's row before changing its own status) and passes with it.
 - **Chaos test with real processes** (`npm run chaos -w server`): worker processes are SIGKILLed every 500 ms while they run 100 top-level runs (half of them fanning out to 3 sub-agents). Two recorded runs:
 
@@ -117,6 +153,7 @@ npm run seed                  # schema + sample shop database + analyst role
 npm run api                   # http://127.0.0.1:3002
 npm run worker                # start as many as you like
 npm run web                   # http://localhost:5174
+npm run ask -w server -- docs "How does Keel recover from a crash?"   # one question, printed trace
 ```
 
 `npm test` runs the test suite against `TEST_DATABASE_URL`.

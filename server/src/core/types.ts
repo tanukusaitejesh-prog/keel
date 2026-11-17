@@ -90,6 +90,11 @@ export interface ToolDef<I = any> {
   name: string;
   description: string;
   input: z.ZodType<I>;
+  /**
+   * JSON Schema shown to the model, when it is not derived from `input`. Used by
+   * adapters (e.g. LangChain tools) whose tool validates its own arguments.
+   */
+  parameters?: Record<string, unknown>;
   effect: Effect;
   /** Pause for human approval before running. A function decides per call. */
   needsApproval?: boolean | ((input: I) => boolean);

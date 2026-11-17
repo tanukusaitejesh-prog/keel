@@ -16,6 +16,7 @@ import { createPool, migrate, type Db } from "../src/db.js";
 import { registry } from "../src/agents/index.js";
 import { closeAnalystPool } from "../src/agents/analyst.js";
 import { envProviders } from "../src/core/providers/index.js";
+import { langChainResolver } from "../src/langchain/model.js";
 import { envLimits } from "../src/core/ratelimit.js";
 import { startRun, TERMINAL } from "../src/core/runtime.js";
 import { startWorker } from "../src/core/worker.js";
@@ -132,7 +133,7 @@ async function main() {
   const ids = new Map<string, string>();
   for (const c of cases) ids.set(c.id, await startRun(db, agents, { agent, input: c.question, model }));
   const started = Date.now();
-  const worker = startWorker({ db, agents, providers: envProviders(), limits: envLimits(), leaseMs: 60_000, concurrency: 3 });
+  const worker = startWorker({ db, agents, providers: envProviders({ langchain: langChainResolver() }), limits: envLimits(), leaseMs: 60_000, concurrency: 3 });
   let lastOpen = -1;
   for (;;) {
     const open = (await db.query(

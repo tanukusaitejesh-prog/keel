@@ -8,7 +8,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: pgvector/pgvector:pg17
         env:
           POSTGRES_PASSWORD: postgres
         ports: ["5432:5432"]
@@ -17,6 +17,7 @@ jobs:
     env:
       DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
       TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/postgres
+      EXPECT_PGVECTOR: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
