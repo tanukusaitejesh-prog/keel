@@ -3,6 +3,7 @@ import { pathToFileURL } from "node:url";
 import { createPool, migrate, type Db } from "./db.js";
 import { registry } from "./agents/index.js";
 import { envProviders } from "./core/providers/index.js";
+import { langChainResolver } from "./langchain/model.js";
 import { envLimits } from "./core/ratelimit.js";
 import { startWorker } from "./core/worker.js";
 
@@ -34,7 +35,7 @@ async function main() {
   const worker = startWorker({
     db,
     agents: registry(),
-    providers: envProviders(),
+    providers: envProviders({ langchain: langChainResolver() }),
     limits: envLimits(),
     leaseMs,
     concurrency,
